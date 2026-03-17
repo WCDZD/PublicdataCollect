@@ -1,6 +1,12 @@
 import unittest
 
-from collector import classify_accession, extract_accessions, infer_data_type
+from collector import (
+    build_keywords_from_task,
+    classify_accession,
+    extract_accessions,
+    infer_data_type,
+    normalize_folder_name,
+)
 
 
 class CollectorUnitTests(unittest.TestCase):
@@ -22,6 +28,30 @@ class CollectorUnitTests(unittest.TestCase):
         self.assertIn("scRNA", hint)
         self.assertIn("RNA-seq", hint)
         self.assertIn("WES", hint)
+
+    def test_build_keywords_from_task_with_aliases(self):
+        task = {
+            "cancer_type": "NSCLC",
+            "data_type": "scRNA",
+            "search_aliases": ["NSCLC", "Non-Small Cell Lung Cancer"],
+            "extra_keywords": ["tumor microenvironment"],
+        }
+        keywords = build_keywords_from_task(task)
+        self.assertEqual(len(keywords), 2)
+        self.assertIn("(NSCLC)", keywords[0])
+        self.assertIn("tumor microenvironment", keywords[0])
+
+    def test_build_keywords_from_task_keyword_groups_priority(self):
+        task = {
+            "cancer_type": "NSCLC",
+            "data_type": "WES",
+            "keyword_groups": ["(NSCLC) AND (WES)"]
+        }
+        keywords = build_keywords_from_task(task)
+        self.assertEqual(keywords, ["(NSCLC) AND (WES)"])
+
+    def test_normalize_folder_name(self):
+        self.assertEqual(normalize_folder_name("Non Small Cell/Lung Cancer"), "Non_Small_Cell_Lung_Cancer")
 
 
 if __name__ == "__main__":

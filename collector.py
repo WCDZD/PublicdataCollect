@@ -36,6 +36,15 @@ DATA_TYPE_HINTS = {
     "ATAC-seq": [r"\batac[-\s]?seq\b"],
 }
 
+DATA_TYPE_QUERY_MAP = {
+    "scRNA": "(scRNA OR single-cell RNA OR single cell RNA OR scRNA-seq)",
+    "RNA": "(RNA OR RNA-seq OR transcriptome)",
+    "RNA-seq": "(RNA-seq OR transcriptome)",
+    "WES": "(WES OR whole exome)",
+    "WGS": "(WGS OR whole genome)",
+    "ATAC": "(ATAC OR ATAC-seq)",
+}
+
 
 @dataclass
 class RepositoryInfo:
@@ -58,6 +67,10 @@ REPOSITORY_MAP: Dict[str, RepositoryInfo] = {
     "CRA": RepositoryInfo("GSA-Human/Genome Sequence Archive", "unknown", "https://ngdc.cncb.ac.cn/search/?dbId=gsa&q={acc}"),
     "HRA": RepositoryInfo("HRA", "unknown", "https://ngdc.cncb.ac.cn/search/?dbId=hra&q={acc}"),
 }
+
+
+def normalize_folder_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip())
 
 
 def build_query(keyword: str, days_back: int) -> str:
@@ -125,16 +138,14 @@ def save_state(path: Path, state: dict) -> None:
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def iter_rows(papers: Iterable[dict], keyword: str, state: dict) -> List[dict]:
+def iter_rows(papers: Iterable[dict], keyword: str, state: dict, cancer_type: str = "", data_type: str = "") -> List[dict]:
     seen = set(state.get("seen_papers", []))
     now = dt.datetime.now().isoformat(timespec="seconds")
     rows = []
 
     for paper in papers:
         paper_id = paper.get("id") or paper.get("pmid") or ""
-        if not paper_id:
-            continue
-        if paper_id in seen:
+        if not paper_id or paper_id in seen:
             continue
 
         text_blobs = [
@@ -144,48 +155,29 @@ def iter_rows(papers: Iterable[dict], keyword: str, state: dict) -> List[dict]:
         ]
         merged_text = "\n".join(text_blobs)
         accessions = sorted(extract_accessions(merged_text))
-        data_type = infer_data_type(merged_text)
+        data_type_hint = infer_data_type(merged_text)
+
+        base = {
+            "paper_id": paper_id,
+            "title": paper.get("title", ""),
+            "journal": paper.get("journalTitle", ""),
+            "pub_year": paper.get("pubYear", ""),
+            "authors": paper.get("authorString", ""),
+            "doi": paper.get("doi", ""),
+            "source": paper.get("source", ""),
+            "first_seen_at": now,
+            "keyword": keyword,
+            "cancer_type": cancer_type,
+            "data_type": data_type,
+            "data_type_hint": data_type_hint,
+        }
 
         if not accessions:
-            rows.append(
-                {
-                    "paper_id": paper_id,
-                    "title": paper.get("title", ""),
-                    "journal": paper.get("journalTitle", ""),
-                    "pub_year": paper.get("pubYear", ""),
-                    "authors": paper.get("authorString", ""),
-                    "doi": paper.get("doi", ""),
-                    "source": paper.get("source", ""),
-                    "first_seen_at": now,
-                    "keyword": keyword,
-                    "accession": "",
-                    "data_type_hint": data_type,
-                    "downloadable": "unknown",
-                    "repository": "unknown",
-                    "download_url": "",
-                }
-            )
+            rows.append({**base, "accession": "", "downloadable": "unknown", "repository": "unknown", "download_url": ""})
         else:
             for acc in accessions:
                 repository, downloadable, url = classify_accession(acc)
-                rows.append(
-                    {
-                        "paper_id": paper_id,
-                        "title": paper.get("title", ""),
-                        "journal": paper.get("journalTitle", ""),
-                        "pub_year": paper.get("pubYear", ""),
-                        "authors": paper.get("authorString", ""),
-                        "doi": paper.get("doi", ""),
-                        "source": paper.get("source", ""),
-                        "first_seen_at": now,
-                        "keyword": keyword,
-                        "accession": acc,
-                        "data_type_hint": data_type,
-                        "downloadable": downloadable,
-                        "repository": repository,
-                        "download_url": url,
-                    }
-                )
+                rows.append({**base, "accession": acc, "downloadable": downloadable, "repository": repository, "download_url": url})
 
         seen.add(paper_id)
 
@@ -196,20 +188,9 @@ def iter_rows(papers: Iterable[dict], keyword: str, state: dict) -> List[dict]:
 def write_csv(path: Path, rows: List[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     headers = [
-        "paper_id",
-        "title",
-        "journal",
-        "pub_year",
-        "authors",
-        "doi",
-        "source",
-        "first_seen_at",
-        "keyword",
-        "accession",
-        "data_type_hint",
-        "downloadable",
-        "repository",
-        "download_url",
+        "paper_id", "title", "journal", "pub_year", "authors", "doi", "source",
+        "first_seen_at", "keyword", "cancer_type", "data_type", "accession",
+        "data_type_hint", "downloadable", "repository", "download_url",
     ]
 
     file_exists = path.exists()
@@ -227,7 +208,7 @@ def run_collect(args: argparse.Namespace) -> None:
 
     state = load_state(state_path)
     papers = search_europe_pmc(args.keyword, args.days_back, args.page_size, args.max_pages)
-    rows = iter_rows(papers, args.keyword, state)
+    rows = iter_rows(papers, args.keyword, state, args.cancer_type or "", args.data_type or "")
 
     if rows:
         write_csv(out_path, rows)
@@ -245,8 +226,64 @@ def run_collect_from_config(args: argparse.Namespace) -> None:
         state=cfg["state"],
         page_size=cfg.get("page_size", 100),
         max_pages=cfg.get("max_pages", 20),
+        cancer_type=cfg.get("cancer_type", ""),
+        data_type=cfg.get("data_type", ""),
     )
     run_collect(namespace)
+
+
+def build_keywords_from_task(task: dict) -> List[str]:
+    groups = [g.strip() for g in task.get("keyword_groups", []) if g.strip()]
+    if groups:
+        return groups
+
+    aliases = task.get("search_aliases") or [task["cancer_type"]]
+    data_query = task.get("data_type_query") or DATA_TYPE_QUERY_MAP.get(task["data_type"], task["data_type"])
+    extras = task.get("extra_keywords", [])
+    extra_query = " AND ".join(f"({k})" for k in extras if k.strip())
+
+    queries = []
+    for alias in aliases:
+        q = f"({alias}) AND ({data_query})"
+        if extra_query:
+            q = f"{q} AND {extra_query}"
+        queries.append(q)
+    return queries
+
+
+def run_collect_from_keywords_file(args: argparse.Namespace) -> None:
+    cfg = json.loads(Path(args.keywords_file).read_text(encoding="utf-8"))
+    base_output = Path(cfg.get("base_output_dir", "./outputs"))
+    base_state = Path(cfg.get("base_state_dir", "./state"))
+    days_back_default = cfg.get("days_back", 365)
+    page_size_default = cfg.get("page_size", 100)
+    max_pages_default = cfg.get("max_pages", 20)
+
+    summary = []
+    for task in cfg.get("tasks", []):
+        cancer_dir = normalize_folder_name(task["cancer_type"])
+        data_type_dir = normalize_folder_name(task["data_type"])
+        out_path = base_output / cancer_dir / data_type_dir / "papers.csv"
+        state_path = base_state / cancer_dir / data_type_dir / "state.json"
+
+        keywords = build_keywords_from_task(task)
+        for keyword in keywords:
+            ns = argparse.Namespace(
+                keyword=keyword,
+                days_back=task.get("days_back", days_back_default),
+                out=str(out_path),
+                state=str(state_path),
+                page_size=task.get("page_size", page_size_default),
+                max_pages=task.get("max_pages", max_pages_default),
+                cancer_type=task["cancer_type"],
+                data_type=task["data_type"],
+            )
+            run_collect(ns)
+            summary.append(f"{task['cancer_type']}/{task['data_type']} <- {keyword}")
+
+    print("completed_tasks=")
+    for item in summary:
+        print(f"- {item}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -260,11 +297,17 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--state", required=True)
     collect.add_argument("--page-size", type=int, default=100)
     collect.add_argument("--max-pages", type=int, default=20)
+    collect.add_argument("--cancer-type", default="")
+    collect.add_argument("--data-type", default="")
     collect.set_defaults(func=run_collect)
 
     collect_cfg = sub.add_parser("collect-from-config", help="Run collection from JSON config file.")
     collect_cfg.add_argument("--config", required=True)
     collect_cfg.set_defaults(func=run_collect_from_config)
+
+    kw = sub.add_parser("collect-from-keywords", help="Run batch collection from independent keyword config.")
+    kw.add_argument("--keywords-file", required=True)
+    kw.set_defaults(func=run_collect_from_keywords_file)
 
     return parser
 
