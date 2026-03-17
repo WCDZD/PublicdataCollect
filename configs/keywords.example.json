@@ -1,0 +1,28 @@
+{
+  "base_output_dir": "./outputs",
+  "base_state_dir": "./state",
+  "days_back": 365,
+  "page_size": 100,
+  "max_pages": 20,
+  "tasks": [
+    {
+      "cancer_type": "NSCLC",
+      "data_type": "scRNA",
+      "search_aliases": [
+        "NSCLC",
+        "Non-Small Cell Lung Cancer"
+      ],
+      "extra_keywords": [
+        "tumor microenvironment"
+      ]
+    },
+    {
+      "cancer_type": "NSCLC",
+      "data_type": "WES",
+      "keyword_groups": [
+        "(NSCLC) AND (WES OR whole exome)",
+        "(Non-Small Cell Lung Cancer) AND (WES OR whole exome)"
+      ]
+    }
+  ]
+}
