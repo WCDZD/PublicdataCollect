@@ -1,0 +1,8 @@
+{
+  "keyword": "(NSCLC OR non-small cell lung cancer) AND (WES OR RNA-seq OR scRNA)",
+  "days_back": 365,
+  "out": "./outputs/nsclc_all.csv",
+  "state": "./state/nsclc_all_state.json",
+  "page_size": 100,
+  "max_pages": 20
+}
